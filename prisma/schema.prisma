@@ -1,0 +1,78 @@
+// HubSpot Dedupe — Prisma schema
+// See ../PLAN.md for data model rationale
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model ScanRun {
+  id              String    @id @default(cuid())
+  objectType      String    // "contact" | "company"
+  status          String    // "queued" | "running" | "complete" | "failed"
+  stage           String?   // "paginating" | "matching" | "persisting" — for progress UI
+  recordsScanned  Int       @default(0)
+  totalRecords    Int?
+  groupsFound     Int       @default(0)
+  startedAt       DateTime  @default(now())
+  completedAt     DateTime?
+  error           String?
+  ruleSet         String    // JSON snapshot of rules used
+  groups          DuplicateGroup[]
+
+  // Auto-merge progress tracking (fire-and-forget background task)
+  autoMergeStatus       String?   // null | "running" | "complete" | "failed"
+  autoMergeTotal        Int?      // total groups to process
+  autoMergedCount       Int       @default(0)
+  autoMergeFailedCount  Int       @default(0)
+  autoMergeStartedAt    DateTime?
+  autoMergeCompletedAt  DateTime?
+  autoMergeError        String?
+
+  @@index([status, startedAt])
+}
+
+model DuplicateGroup {
+  id             String    @id @default(cuid())
+  scanRunId      String
+  scanRun        ScanRun   @relation(fields: [scanRunId], references: [id], onDelete: Cascade)
+  objectType     String    // "contact" | "company"
+  matchTier      String    // "tier1_linkedin" | "tier1_email" | "tier2_name_company" | "tier3_fuzzy"
+  matchScore     Float     // 0.0 - 1.0
+  matchReasons   String    // JSON: e.g. {"linkedin":"linkedin.com/in/jdoe"}
+  primaryId      String?   // chosen primary HubSpot ID (null until user decides)
+  status         String    // "pending" | "merged" | "skipped" | "failed" | "stale"
+  decidedAt      DateTime?
+  errorMessage   String?
+  members        GroupMember[]
+
+  @@index([scanRunId, status])
+  @@index([scanRunId, matchTier])
+}
+
+model GroupMember {
+  id                 String         @id @default(cuid())
+  groupId            String
+  group              DuplicateGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  hubspotId          String         // HubSpot object ID
+  propertiesSnapshot String         // JSON of record properties at scan time
+
+  @@index([groupId])
+  @@index([hubspotId])
+}
+
+// Pairs the user marked "not a duplicate" — future scans skip these
+model SuppressedPair {
+  id         String   @id @default(cuid())
+  objectType String   // "contact" | "company"
+  idA        String   // lower HubSpot ID (sorted for uniqueness)
+  idB        String   // higher HubSpot ID
+  reason     String?  // user-provided note (optional)
+  createdAt  DateTime @default(now())
+
+  @@unique([objectType, idA, idB])
+}

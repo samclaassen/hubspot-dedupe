@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd job spec for the weekly HubSpot dedupe.
+  Install by running: npm run install-launchd   (see package.json)
+  Or manually:
+    envsubst < scripts/launchd/com.yourorg.hubspot-dedupe.plist.template \
+      > ~/Library/LaunchAgents/com.yourorg.hubspot-dedupe.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.yourorg.hubspot-dedupe.plist
+
+  Unload (e.g. to edit and reload):
+    launchctl bootout gui/$(id -u)/com.yourorg.hubspot-dedupe
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.yourorg.hubspot-dedupe</string>
+
+    <!-- Run the weekly-dedupe npm script. Absolute path to npm to avoid PATH issues. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/npm</string>
+        <string>run</string>
+        <string>weekly-dedupe</string>
+    </array>
+
+    <!-- Where to find the project. Substituted by envsubst at install time. -->
+    <key>WorkingDirectory</key>
+    <string>${DEDUPE_PROJECT_DIR}</string>
+
+    <!-- Run every Sunday at 2:00 AM local time. Weekday=0 means Sunday. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>0</integer>
+        <key>Hour</key>
+        <integer>2</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- If the Mac is asleep at 2am, run as soon as it wakes. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Logs live in ~/Library/Logs/ so they rotate with macOS and don't require sudo -->
+    <key>StandardOutPath</key>
+    <string>${HOME}/Library/Logs/hubspot-dedupe-weekly.log</string>
+    <key>StandardErrorPath</key>
+    <string>${HOME}/Library/Logs/hubspot-dedupe-weekly.log</string>
+
+    <!-- Ensure Homebrew (Node) and system binaries are on PATH for spawned processes. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <!-- Don't respawn on crash — weekly runs only. -->
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>
