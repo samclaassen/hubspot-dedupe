@@ -69,10 +69,10 @@ export function collectContactEmails(properties: Record<string, string | null>):
 }
 
 /** Collect LinkedIn URLs from a contact.
- * Pools `linkedin_profile`, `hs_linkedin_url`, and `pb_linkedin_profile_url`.
- * The same LinkedIn URL can live in any of these fields on different records
- * (verified on real HubSpot portals), so we must check all three to catch
- * all duplicates.
+ * Expanded 2026-04-15: pools `linkedin_profile`, `hs_linkedin_url`, and
+ * `pb_linkedin_profile_url`. The same LinkedIn URL can live in any of these
+ * fields on different records (verified on real HubSpot portals), so we must
+ * check all three to catch all duplicates.
  */
 export function collectContactLinkedIn(properties: Record<string, string | null>): string[] {
   const fields = ["linkedin_profile", "hs_linkedin_url", "pb_linkedin_profile_url"];

@@ -131,10 +131,10 @@ export function detectDuplicates(contacts: Contact[]): DetectedGroup[] {
   }
 
   // -------- Post-processing: union-find to unify overlapping groups --------
-  // When the same records are caught by multiple tiers (e.g., a person
+  // When the same records are caught by multiple tiers (e.g., Lindsay O'Brien
   // matches via LinkedIn AND via Name+Company), those sub-groups often overlap
   // on member IDs. We union-find all groups that share ≥1 member so the user
-  // sees ONE connected component per real person, not several separate pair groups.
+  // sees ONE connected component per real person, not 4 separate pair groups.
   return unifyOverlappingGroups(groups);
 }
 
@@ -289,12 +289,11 @@ function nameBlocks(contacts: Contact[]): Contact[][] {
  * this fires, Tier 2/3 should skip the pair even if name + company match,
  * because the records are demonstrably different humans.
  *
- * Real-world motivation: a HubSpot portal can accumulate many records that
- * share a firstname/lastname because of a broken automation template (e.g.
- * 15 records all stamped with the same placeholder name), where each record
- * is actually a DIFFERENT real person with distinct emails and distinct
- * LinkedIn profiles. Without this check, union-find would collapse them into
- * a single group and Auto-merge All would destroy real contacts.
+ * Real-world motivation: A HubSpot portal had 15 records with firstname="John"
+ * and lastname="Solaro" (a corrupted automation template) that were each a
+ * DIFFERENT real person with distinct emails and distinct LinkedIn profiles.
+ * Without this check, union-find would collapse them into a single group
+ * and Auto-merge All would destroy 14 real contacts.
  *
  * This check is NOT applied to Tier 1 (same LinkedIn or same email is a
  * definitive signal that overrides surface-level field conflicts).
@@ -333,8 +332,7 @@ function emitTier2Pairs(
 
       // SAFETY: Skip if records have conflicting identities (different
       // non-empty emails or different non-empty LinkedIn URLs). Protects
-      // against corrupted-name cases where many records share a placeholder
-      // first/last name from a broken automation but are actually different humans.
+      // against corrupted-name cases like the corrupted-name automation bug.
       if (hasConflictingIdentities(a, b)) continue;
 
       const nameA = normalizePersonName(a.properties.firstname, a.properties.lastname);

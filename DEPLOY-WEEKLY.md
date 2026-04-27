@@ -1,14 +1,16 @@
-# Weekly dedupe — Mac Mini deployment guide
+# Weekly HubSpot cleanup — Mac Mini deployment guide
 
-Turn the one-off dedupe tool into a scheduled job that runs every Sunday at 2:00 AM, auto-merges high-confidence duplicates, and DMs you a summary in your Slack workspace.
+Turn the cleanup tool into a scheduled job that runs every Sunday at 2:00 AM. One run covers three audits — **dedupe** (auto-merges high-confidence duplicates), **property audit** (scores unused properties), and **list audit** (scores stale lists). One unified Slack DM at the end.
 
-**Who this is for:** whoever is running the dedupe tool. Everything below assumes you're sitting at (or SSH'd into) the Mac (Mini) where the tool will live long-term.
+> **Migration note (2026-04-24):** The script is now `scripts/weekly-cleanup.ts` and the launchd label is `com.yourorg.hubspot-cleanup`. The old `scripts/weekly-dedupe.ts` + legacy `com.yourorg.hubspot-dedupe` still exist in the repo for reference. Re-running `bash scripts/launchd/install.sh` auto-migrates — it unloads the legacy job and loads the new one.
 
-**What you need before starting:**
+**Who this is for:** Sam (or whoever is running the dedupe tool). Everything below assumes you're sitting at (or SSH'd into) the Mac Mini where the tool lives long-term.
 
-- A Slack app + bot token with `chat:write`, `im:write`, `users:read`, `users:read.email` scopes. See `.env.local.example` for the variables you'll populate.
-- The bot authorized in your Slack workspace.
-- A one-time test DM sent from the bot to yourself to confirm it works.
+**What already exists:**
+
+- The Slack app and bot token are already created (see `.env.local` values below).
+- The app is already authorized in your Slack workspace.
+- Test DMs have already been sent from the bot — you should have seen one.
 
 **What you're about to do:**
 
@@ -27,13 +29,13 @@ Total time: ~10 minutes.
 
 - Node 25+ via Homebrew → `which node` should print `/opt/homebrew/bin/node`
 - npm → `which npm` should print `/opt/homebrew/bin/npm`
-- A working copy of the `hubspot-dedupe` repo → clone or rsync it to `~/hubspot-dedupe/` on the Mini
+- A working copy of the `hubspot-dedupe` repo → already at `~/hubspot-dedupe/` on the Mini
 
 ---
 
 ## 1. Sync the latest code from the laptop to the Mini
 
-Run this command **from the laptop** (where the code changes were authored):
+Run this command **from the laptop** (where the code changes were authored today):
 
 ```bash
 rsync -az --delete \
@@ -41,16 +43,12 @@ rsync -az --delete \
   --exclude '.next' \
   --exclude 'dev.db' \
   --exclude 'dev.db-journal' \
+  --exclude 'scan5-merged-contacts.csv' \
   "<PATH_TO_LOCAL_REPO>/hubspot-dedupe/" \
   <USERNAME>@<MAC_MINI_HOSTNAME>.local:~/hubspot-dedupe/
 ```
 
-Replace:
-- `<PATH_TO_LOCAL_REPO>` with the absolute path on the laptop (e.g. `~/code` or similar)
-- `<USERNAME>` with the user account on the Mini
-- `<MAC_MINI_HOSTNAME>` with whatever `hostname -s` prints on the Mini
-
-Note: `dev.db` is excluded so the Mini's existing merged state stays intact. If you're starting fresh on the Mini and want the laptop's DB too, remove the `--exclude 'dev.db'` line.
+Note: `dev.db` is excluded so the Mini's existing merged state (from prior runs) stays intact. If you're starting fresh on the Mini and want the laptop's DB too, remove the `--exclude 'dev.db'` line.
 
 If SSH isn't set up or the hostname differs, adjust accordingly.
 
@@ -68,15 +66,15 @@ nano .env.local
 Add these three lines (the `HUBSPOT_ACCESS_TOKEN` and `DATABASE_URL` should already be in the file):
 
 ```
-SLACK_BOT_TOKEN=<YOUR_SLACK_BOT_TOKEN>
-SLACK_DM_USER_ID=<YOUR_SLACK_USER_ID>
+SLACK_BOT_TOKEN=<your_slack_bot_token>
+SLACK_DM_USER_ID=<your_slack_user_id>
 DEDUPE_DASHBOARD_URL=http://localhost:3000
 ```
 
 **Explanation of the three values:**
 
 - `SLACK_BOT_TOKEN` — the Bot User OAuth Token from the "HubSpot Dedupe" Slack app (your workspace). Posts DMs via `chat.postMessage`.
-- `SLACK_DM_USER_ID` — the Slack user ID that should receive the DM. Find yours via Slack → Profile → "Copy member ID".
+- `SLACK_DM_USER_ID` — your Slack user ID (`<your_slack_user_id>` in your Slack workspace). The bot DMs this user.
 - `DEDUPE_DASHBOARD_URL` — base URL for the review dashboard. Used to build "open dashboard" links in the Slack message. Leave as `http://localhost:3000` if you only ever open it on the Mini; set it to a tunnel URL if you expose the dashboard publicly.
 
 Save the file (`Ctrl+O`, `Enter`, `Ctrl+X` in nano).
@@ -102,16 +100,16 @@ npx prisma generate         # regenerates the Prisma client
 This is the smoke test. **Highly recommended** before letting launchd run it unattended at 2am.
 
 ```bash
-npm run weekly-dedupe
+npm run weekly-cleanup
 ```
 
 Expected behavior:
 
-- Prints `[weekly-dedupe] starting…`
+- Prints `[weekly-cleanup] starting @ ...`
 - Paginates all contacts (~3–5 minutes)
 - Runs detection, filters out suppressed pairs, drops forward-refs
 - Auto-merges ≥ 0.99 score groups (progress logged)
-- Prints `[weekly-dedupe] Slack DM sent`
+- Prints `[weekly-cleanup] Slack DM sent`
 - Exits with code 0
 - **You receive a DM from "HubSpot Dedupe" in your Slack workspace**
 
@@ -132,8 +130,8 @@ bash scripts/launchd/install.sh
 The install script:
 
 1. Computes the absolute repo path on this Mac.
-2. Renders `scripts/launchd/com.yourorg.hubspot-dedupe.plist.template` with that path.
-3. Copies the rendered plist to `~/Library/LaunchAgents/com.yourorg.hubspot-dedupe.plist`.
+2. Renders `scripts/launchd/com.yourorg.hubspot-cleanup.plist.template` with that path.
+3. Copies the rendered plist to `~/Library/LaunchAgents/com.yourorg.hubspot-cleanup.plist`.
 4. Unloads any prior version of the job.
 5. Loads the new job via `launchctl bootstrap`.
 6. Prints the job's status.
@@ -147,13 +145,13 @@ You should see:
 ### Verify it's scheduled
 
 ```bash
-launchctl list | grep hubspot-dedupe
+launchctl list | grep hubspot-cleanup
 ```
 
 Should print something like:
 
 ```
--     0    com.yourorg.hubspot-dedupe
+-     0    com.yourorg.hubspot-cleanup
 ```
 
 The first column is the PID (`-` means not currently running, which is correct). The middle column is the last exit code (0 = success). Once Sunday rolls around, you'll see non-dash values here during the run.
@@ -161,13 +159,13 @@ The first column is the PID (`-` means not currently running, which is correct).
 ### Force a run right now (optional, definitive test)
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/com.yourorg.hubspot-dedupe
+launchctl kickstart -k gui/$(id -u)/com.yourorg.hubspot-cleanup
 ```
 
 Then watch the logs:
 
 ```bash
-tail -f ~/Library/Logs/hubspot-dedupe-weekly.log
+tail -f ~/Library/Logs/hubspot-cleanup-weekly.log
 ```
 
 You'll see the same output as step 4 above. This time it's running under launchd, so you know the scheduled version will work.
@@ -208,13 +206,13 @@ Three logs to watch:
 
 | What | Where |
 |---|---|
-| stdout/stderr of the weekly run | `~/Library/Logs/hubspot-dedupe-weekly.log` |
-| launchd's own logs about the job | `log show --last 1d --predicate 'subsystem == "com.apple.xpc.launchd"' | grep hubspot-dedupe` |
-| Slack DMs | Your Slack DMs from the "HubSpot Dedupe" bot |
+| stdout/stderr of the weekly run | `~/Library/Logs/hubspot-cleanup-weekly.log` |
+| launchd's own logs about the job | `log show --last 1d --predicate 'subsystem == "com.apple.xpc.launchd"' | grep hubspot-cleanup` |
+| Slack DMs | Your your Slack workspace DMs from "HubSpot Dedupe" bot |
 
 If something goes wrong at 2 AM on a Sunday, you'll know on Monday morning because either:
 
-- No Slack DM arrived — check `~/Library/Logs/hubspot-dedupe-weekly.log` for the error
+- No Slack DM arrived — check `~/Library/Logs/hubspot-cleanup-weekly.log` for the error
 - A Slack DM with ❌ arrived — the error is in the message
 
 ---
@@ -223,7 +221,7 @@ If something goes wrong at 2 AM on a Sunday, you'll know on Monday morning becau
 
 ### "SLACK_BOT_TOKEN or SLACK_DM_USER_ID not set"
 
-Env vars didn't load. Check `cat .env.local` has both lines without typos. `npm run weekly-dedupe` uses `tsx --env-file=.env.local`, so the file must be at the repo root.
+Env vars didn't load. Check `cat .env.local` has both lines without typos. `npm run weekly-cleanup` uses `tsx --env-file=.env.local`, so the file must be at the repo root.
 
 ### "prisma.$connect is not a function" or similar Prisma errors
 
@@ -241,7 +239,7 @@ Possible causes:
 
    This wakes the Mini at 1:55 AM every day — launchd fires the job 5 minutes later.
 
-2. **Job failed at launch and launchd is throttling it.** `launchctl list | grep hubspot-dedupe` shows a non-zero exit code. Check the log for the actual error.
+2. **Job failed at launch and launchd is throttling it.** `launchctl list | grep hubspot-cleanup` shows a non-zero exit code. Check the log for the actual error.
 
 3. **Path issues under launchd.** launchd starts jobs with a minimal PATH. The plist sets `PATH=/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin` but if Node is elsewhere on your machine, update the plist template.
 
@@ -255,14 +253,14 @@ The bot needs to have been added to the user's DM at least once, which happens a
 
 ```bash
 curl -s -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
-  "https://slack.com/api/users.lookupByEmail?email=you.com"
+  "https://slack.com/api/users.lookupByEmail?email=you@example.com"
 ```
 
 The returned `user.id` should match `SLACK_DM_USER_ID` in `.env.local`.
 
 ### The scan finds way fewer groups than expected
 
-This is expected after you've done an initial bulk cleanup. Once the big backlog is merged, a typical weekly run should find only 10–100 new groups (new records that came in since the previous scan).
+This is expected after today's cleanup. You merged ~2,634 groups today, so the set of remaining "low-hanging dupes" is small. A typical weekly run should find 10–100 new groups (new records that came in since the previous scan).
 
 If you want to sanity-check what the scanner is seeing, inspect the DB:
 
@@ -282,13 +280,13 @@ Next scan will re-surface the group.
 
 ### I want to change the schedule (e.g., daily instead of weekly)
 
-Edit `scripts/launchd/com.yourorg.hubspot-dedupe.plist.template` → the `StartCalendarInterval` section. Remove the `Weekday` key to run every day. Then re-run `bash scripts/launchd/install.sh`.
+Edit `scripts/launchd/com.yourorg.hubspot-cleanup.plist.template` → the `StartCalendarInterval` section. Remove the `Weekday` key to run every day. Then re-run `bash scripts/launchd/install.sh`.
 
 ### Uninstall
 
 ```bash
-launchctl bootout gui/$(id -u)/com.yourorg.hubspot-dedupe
-rm ~/Library/LaunchAgents/com.yourorg.hubspot-dedupe.plist
+launchctl bootout gui/$(id -u)/com.yourorg.hubspot-cleanup
+rm ~/Library/LaunchAgents/com.yourorg.hubspot-cleanup.plist
 ```
 
 Nothing else needs cleanup — all state is in `dev.db` which you can keep or delete.
@@ -303,20 +301,22 @@ For reference, here's what changed in the repo for this deployment:
 |---|---|
 | `scripts/weekly-dedupe.ts` | CLI entry point. Orchestrates scan → auto-merge → Slack summary. |
 | `src/lib/slack.ts` | Slack DM helper using `chat.postMessage` + Block Kit formatter. |
-| `scripts/launchd/com.yourorg.hubspot-dedupe.plist.template` | launchd job spec, templated so it works on any path. |
+| `scripts/launchd/com.yourorg.hubspot-cleanup.plist.template` | launchd job spec, templated so it works on any path. |
 | `scripts/launchd/install.sh` | One-shot install script. Renders template + bootstraps launchd. |
 | `src/app/scan/[id]/actions.ts` — `skipGroup` | Now also writes to `SuppressedPair` table when you Skip. |
 | `src/lib/scanner.ts` — `filterDetectedGroups` | New post-detection filter: drops suppressed pairs + forward-referenced records. |
 | `src/lib/hubspot.ts` — `batchResolveCanonicalContactIds` | Batch API helper for canonical ID resolution (used for forward-ref filtering). |
 | `src/app/page.tsx` — last scheduled run widget | Dashboard now shows last weekly run status at a glance. |
-| `package.json` — `weekly-dedupe` script | `npm run weekly-dedupe` entry point. |
+| `package.json` — `weekly-dedupe` script | `npm run weekly-cleanup` entry point. |
 
 ### Slack app details
-- **Name:** HubSpot Dedupe (you can name it whatever)
+
+- **Name:** HubSpot Dedupe
 - **Workspace:** your Slack workspace
-- **Bot User:** e.g. `@hubspot_dedupe`
+- **App ID:** <APP_ID>
+- **Bot User:** @hubspot_dedupe (user ID: <BOT_USER_ID>)
 - **Scopes:** `chat:write`, `im:write`, `users:read`, `users:read.email`
 
-Manage your Slack apps at: https://api.slack.com/apps
+You can manage the app at: https://api.slack.com/apps/<APP_ID>
 
 If the bot token ever leaks or needs rotating: Slack API page → OAuth & Permissions → "Rotate token". Then update `SLACK_BOT_TOKEN` in `.env.local` on the Mini.

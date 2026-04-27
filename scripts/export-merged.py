@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
-"""Export a CSV of all merged contacts from a given scan (one row per merge group).
+"""Export a CSV of all merged contacts from scan 5 (one row per merge group).
 
 Uses HubSpot's batch read API to resolve each primaryId to its current canonical
 record and fetch the current property values. This automatically follows
 forward references created by subsequent merges.
-
-Usage:
-  python scripts/export-merged.py <SCAN_ID>
-  # or edit SCAN_ID below to a default value
 """
 
 import csv
@@ -21,9 +17,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 DB_PATH = REPO / "dev.db"
 ENV_PATH = REPO / ".env.local"
-# Pass scan id as CLI arg, else edit this placeholder.
-SCAN_ID = sys.argv[1] if len(sys.argv) > 1 else "<YOUR_SCAN_ID>"
-OUT_PATH = REPO / f"merged-contacts-{SCAN_ID}.csv"
+SCAN_ID = "cmo1z8zvp0000mhxfkgz9nl2a"
+OUT_PATH = REPO / "scan5-merged-contacts.csv"
 
 # Read the HubSpot token from .env.local
 token = None

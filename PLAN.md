@@ -1,6 +1,6 @@
 # HubSpot Dedupe — Build Plan
 
-Inspired by a similar dedupe side-project shared on LinkedIn. Two-phase build:
+Inspired by Brandon Dith-Berry's "Dedupleo" ([LinkedIn post](https://www.linkedin.com/posts/brandondithberry_revops-vibecoding-claudecode-share-7449675484776534018-cdi5/)). Two-phase build:
 
 - **v1 (today):** One-off bulk dedupe of Contacts + Companies — connect → scan → review → merge
 - **v2 (later):** Ongoing mode — webhooks + drift scans auto-queue new duplicates
@@ -17,9 +17,9 @@ Key milestones + surprises from the build. See git history for details.
 - **HubSpot Search API 10k cap:** Discovered at exactly record 10,001 — search API rejects pagination past 10,000 results. Switched to basic List API (`basicApi.getPage`) which has no such cap. ([src/lib/hubspot.ts](src/lib/hubspot.ts))
 - **Prisma 7 adapter model:** New `prisma-client` provider requires explicit adapter on client construction. Using `@prisma/adapter-better-sqlite3`. ([src/lib/db.ts](src/lib/db.ts))
 - **Base UI (not Radix):** shadcn/ui generator now emits Base UI primitives. `asChild` pattern doesn't work — use `render={<Button />}` instead.
-- **A real user (name redacted) (12-dup group):** `+alias` stripping correctly collapsed `kate+X.com` addresses into one duplicate group. But she was intentionally using `+alias` as per-tool tracking tags. Real lesson: `+alias` stripping is sometimes wrong. Recommend making it a configurable normalization flag in v1.1.
+- **Real-user example (12-dup group):** `+alias` stripping correctly collapsed `person+X@example.com` addresses into one duplicate group. But she was intentionally using `+alias` as per-tool tracking tags. Real lesson: `+alias` stripping is sometimes wrong. Recommend making it a configurable normalization flag in v1.1.
 - **Merge API 403 MISSING_SCOPES:** First real merge test failed because the Private App was missing `crm.objects.contacts.write` (the write scope was unchecked on the app, not a tier issue). HubSpot's error message listed 4 "requiredGranularScopes" as an OR condition — you only need ONE of them, and the plain `crm.objects.contacts.write` is sufficient. The error message is misleading about ALL vs ANY. Failed merges do NOT mutate any data — HubSpot rejects pre-commit.
-- **Forward-reference merges (`VALIDATION_ERROR`):** Second merge attempt on the same group failed because HubSpot had already merged two of the three Example Name D records into a fourth canonical ID (`215803936944`) at some point after our scan. HubSpot's list API returns the *visible* ID for list entries, but those IDs can become "forward references" that transparently redirect reads to the canonical record. The merge API refuses to accept forward-ref IDs as primary. **Fix: resolve every record ID to its canonical form via a GET at merge time** (see `executeMerge` in [src/lib/merge.ts](src/lib/merge.ts#executeMerge)). The canonical ID is whatever `.id` HubSpot returns in the response body — it may differ from the ID you requested. Dedupe the canonical set before merging.
+- **Forward-reference merges (`VALIDATION_ERROR`):** Second merge attempt on the same group failed because HubSpot had already merged two of the three Burak Yedek records into a fourth canonical ID (`215803936944`) at some point after our scan. HubSpot's list API returns the *visible* ID for list entries, but those IDs can become "forward references" that transparently redirect reads to the canonical record. The merge API refuses to accept forward-ref IDs as primary. **Fix: resolve every record ID to its canonical form via a GET at merge time** (see `executeMerge` in [src/lib/merge.ts](src/lib/merge.ts#executeMerge)). The canonical ID is whatever `.id` HubSpot returns in the response body — it may differ from the ID you requested. Dedupe the canonical set before merging.
 
 ---
 
@@ -616,4 +616,4 @@ None blocking — these can be decided as we build or after the first scan:
 - [ ] **Fuzzy threshold** — default 0.85 for review. May need to tune post-scan based on precision/recall on real results.
 - [ ] **Primary record selection tiebreakers** — current order: most-complete → most-recent-modified → oldest-created. Could add "has valid LinkedIn URL" or "has phone" as additional tiebreakers.
 - [ ] **Whether to show scan progress as a % or just "X of Y records scanned"**
-- [ ] **Theme** — match an existing brand palette or pick your own
+- [ ] **Theme** — copy Dedupleo's green/orange or pick our own

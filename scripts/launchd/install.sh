@@ -1,28 +1,30 @@
 #!/usr/bin/env bash
-# Install (or re-install) the weekly HubSpot dedupe launchd job on this Mac.
+# Install (or re-install) the weekly HubSpot cleanup launchd job on this Mac.
 #
-# Run this from the repo root on the machine where the dedupe tool lives:
+# Run this from the repo root on the machine where the tool lives:
 #   bash scripts/launchd/install.sh
 #
 # The script:
 #   1. Figures out this repo's absolute path
 #   2. Renders the plist template with that path
 #   3. Copies the rendered plist to ~/Library/LaunchAgents/
-#   4. Unloads any existing job with the same label
+#   4. Unloads any existing job with the same OR legacy label
 #   5. Loads the new job (bootstraps into the user's GUI session)
 #   6. Prints `launchctl list` output as a sanity check
 #
 # To uninstall later:
-#   launchctl bootout gui/$(id -u)/com.yourorg.hubspot-dedupe
-#   rm ~/Library/LaunchAgents/com.yourorg.hubspot-dedupe.plist
+#   launchctl bootout gui/$(id -u)/com.yourorg.hubspot-cleanup
+#   rm ~/Library/LaunchAgents/com.yourorg.hubspot-cleanup.plist
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-TEMPLATE="$SCRIPT_DIR/com.yourorg.hubspot-dedupe.plist.template"
-PLIST_DEST="$HOME/Library/LaunchAgents/com.yourorg.hubspot-dedupe.plist"
-LABEL="com.yourorg.hubspot-dedupe"
+TEMPLATE="$SCRIPT_DIR/com.yourorg.hubspot-cleanup.plist.template"
+PLIST_DEST="$HOME/Library/LaunchAgents/com.yourorg.hubspot-cleanup.plist"
+LABEL="com.yourorg.hubspot-cleanup"
+LEGACY_LABEL="com.yourorg.hubspot-dedupe"
+LEGACY_PLIST="$HOME/Library/LaunchAgents/com.yourorg.hubspot-dedupe.plist"
 
 echo "[install-launchd] repo dir: $REPO_DIR"
 echo "[install-launchd] plist destination: $PLIST_DEST"
@@ -42,6 +44,13 @@ cat "$PLIST_DEST"
 # Tear down any existing job, ignoring errors if it wasn't loaded
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 
+# Tear down legacy dedupe-only job if present (migration path)
+if [ -f "$LEGACY_PLIST" ] || launchctl list 2>/dev/null | grep -q "$LEGACY_LABEL"; then
+  echo "[install-launchd] migrating: unloading legacy $LEGACY_LABEL"
+  launchctl bootout "gui/$(id -u)/$LEGACY_LABEL" 2>/dev/null || true
+  rm -f "$LEGACY_PLIST"
+fi
+
 # Load the new job (modern bootstrap API, works on macOS 10.10+)
 launchctl bootstrap "gui/$(id -u)" "$PLIST_DEST"
 echo "[install-launchd] loaded $LABEL into launchd"
@@ -57,4 +66,4 @@ echo "To trigger a run right now (for testing), use:"
 echo "  launchctl kickstart -k gui/\$(id -u)/$LABEL"
 echo ""
 echo "To watch logs as it runs:"
-echo "  tail -f ~/Library/Logs/hubspot-dedupe-weekly.log"
+echo "  tail -f ~/Library/Logs/hubspot-cleanup-weekly.log"

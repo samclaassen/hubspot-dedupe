@@ -76,3 +76,267 @@ model SuppressedPair {
 
   @@unique([objectType, idA, idB])
 }
+
+// ============================================================
+// HubSpot cleanup — property audit
+// See docs/HubSpot-Cleanup-Plan.md for scoring + flow details
+// ============================================================
+model PropertyAuditRun {
+  id                      String            @id @default(cuid())
+  objectTypes             String            // JSON: ["contacts","companies","deals"]
+  status                  String            // "queued" | "running" | "complete" | "failed"
+  stage                   String?           // "loading_properties" | "counting" | "loading_workflows" | "scoring" | "persisting"
+  propertiesScanned       Int               @default(0)
+  totalProperties         Int?
+  findingsCount           Int               @default(0)
+  startedAt               DateTime          @default(now())
+  completedAt             DateTime?
+  error                   String?
+  ruleSet                 String            // JSON snapshot of scoring weights + thresholds
+
+  // Bulk archive progress (pre-wired for v1.1 auto-archive; v1 uses this for "Archive all" UI button)
+  bulkArchiveStatus       String?           // null | "running" | "complete" | "failed"
+  bulkArchiveMinScore     Float?
+  bulkArchiveTotal        Int?
+  bulkArchivedCount       Int               @default(0)
+  bulkArchiveFailedCount  Int               @default(0)
+  bulkArchiveStartedAt    DateTime?
+  bulkArchiveCompletedAt  DateTime?
+  bulkArchiveError        String?
+
+  findings                PropertyFinding[]
+
+  @@index([status, startedAt])
+}
+
+model PropertyFinding {
+  id                    String           @id @default(cuid())
+  auditRunId            String
+  auditRun              PropertyAuditRun @relation(fields: [auditRunId], references: [id], onDelete: Cascade)
+  objectType            String           // "contacts" | "companies" | "deals"
+  propertyName          String           // e.g. "amplemarket_sequence"
+  propertyLabel         String           // human label at scan time
+  propertyGroupName     String?          // e.g. "contactinformation"
+  fieldType             String           // "text" | "select" | "date" | ...
+  dataType              String           // HubSpot "type": string | number | date | datetime | bool | enumeration
+  populatedCount        Int              // records with non-null value (HAS_PROPERTY search)
+  recordBase            Int              // total records for this object type
+  hasFormula            Boolean          @default(false)
+  hubspotDefined        Boolean          @default(false)
+  archivable            Boolean          @default(true)
+  hidden                Boolean          @default(false)
+  formField             Boolean          @default(false)
+  referencedInWorkflows Int              @default(0)
+  workflowIdsJson       String?          // JSON array of workflow IDs mentioning this property
+  lastModifiedAt        DateTime?        // modificationMetadata.updatedAt
+  confidence            Float            // 0.0 - 1.0 (see cleanup-scoring.ts)
+  recommendation        String           // "archive" | "review" | "keep"
+  status                String           // "pending" | "acknowledged" | "archived" | "failed" | "skipped" | "stale"
+  reasonJson            String           // JSON with scoring breakdown for UI transparency
+  decidedAt             DateTime?
+  errorMessage          String?
+  metadataSnapshot      String           // JSON of full property metadata at scan time
+
+  @@index([auditRunId, status])
+  @@index([auditRunId, confidence])
+  @@index([objectType, propertyName])
+}
+
+// Properties the user acknowledged/skipped — future audits don't re-surface
+model SuppressedProperty {
+  id           String   @id @default(cuid())
+  objectType   String
+  propertyName String
+  reason       String?
+  createdAt    DateTime @default(now())
+
+  @@unique([objectType, propertyName])
+}
+
+// ============================================================
+// HubSpot cleanup — list/segment audit
+// ============================================================
+model ListAuditRun {
+  id                     String        @id @default(cuid())
+  status                 String
+  stage                  String?       // "loading_lists" | "scoring" | "persisting"
+  listsScanned           Int           @default(0)
+  totalLists             Int?
+  findingsCount          Int           @default(0)
+  startedAt              DateTime      @default(now())
+  completedAt            DateTime?
+  error                  String?
+  ruleSet                String        // JSON snapshot
+
+  bulkDeleteStatus       String?
+  bulkDeleteMinScore     Float?
+  bulkDeleteTotal        Int?
+  bulkDeletedCount       Int           @default(0)
+  bulkDeleteFailedCount  Int           @default(0)
+  bulkDeleteStartedAt    DateTime?
+  bulkDeleteCompletedAt  DateTime?
+  bulkDeleteError        String?
+
+  findings               ListFinding[]
+
+  @@index([status, startedAt])
+}
+
+model ListFinding {
+  id                    String       @id @default(cuid())
+  auditRunId            String
+  auditRun              ListAuditRun @relation(fields: [auditRunId], references: [id], onDelete: Cascade)
+  hubspotListId         String       // HubSpot's listId
+  name                  String
+  processingType        String       // "MANUAL" | "DYNAMIC" | "SNAPSHOT"
+  objectTypeId          String       // "0-1" contacts, "0-2" companies, etc.
+  createdAt             DateTime     // list creation in HubSpot
+  updatedAt             DateTime     // definition last updated
+  filtersUpdatedAt      DateTime?
+  memberCount           Int          // hs_list_size
+  referenceCount        Int          @default(0) // hs_list_reference_count (workflows/reports using this list)
+  lastRecordAddedAt     DateTime?    // hs_last_record_added_at
+  lastRecordRemovedAt   DateTime?    // hs_last_record_removed_at
+  confidence            Float
+  recommendation        String       // "delete" | "review" | "keep"
+  status                String       // "pending" | "acknowledged" | "deleted" | "failed" | "skipped" | "stale"
+  reasonJson            String
+  decidedAt             DateTime?
+  errorMessage          String?
+  metadataSnapshot      String       // full list response JSON
+
+  @@index([auditRunId, status])
+  @@index([auditRunId, confidence])
+  @@index([hubspotListId])
+}
+
+model SuppressedList {
+  id             String   @id @default(cuid())
+  hubspotListId  String   @unique
+  reason         String?
+  createdAt      DateTime @default(now())
+}
+
+// ============================================================
+// HubSpot cleanup — automation workflow audit
+// ============================================================
+model WorkflowAuditRun {
+  id                     String            @id @default(cuid())
+  status                 String
+  stage                  String?           // loading_workflows | loading_details | scoring | persisting
+  workflowsScanned       Int               @default(0)
+  totalWorkflows         Int?
+  findingsCount          Int               @default(0)
+  startedAt              DateTime          @default(now())
+  completedAt            DateTime?
+  error                  String?
+  ruleSet                String
+
+  bulkDisableStatus      String?
+  bulkDisableMinScore    Float?
+  bulkDisableTotal       Int?
+  bulkDisabledCount      Int               @default(0)
+  bulkDisableFailedCount Int               @default(0)
+  bulkDisableStartedAt   DateTime?
+  bulkDisableCompletedAt DateTime?
+  bulkDisableError       String?
+
+  findings               WorkflowFinding[]
+
+  @@index([status, startedAt])
+}
+
+model WorkflowFinding {
+  id                String           @id @default(cuid())
+  auditRunId        String
+  auditRun          WorkflowAuditRun @relation(fields: [auditRunId], references: [id], onDelete: Cascade)
+  hubspotFlowId     String
+  name              String
+  flowType          String           // WORKFLOW | ...
+  objectTypeId      String           // 0-1 contacts, 0-2 companies, 0-3 deals, etc.
+  isEnabled         Boolean          @default(false)
+  revisionId        String
+  description       String?
+  actionCount       Int              @default(0)
+  createdAt         DateTime
+  updatedAt         DateTime
+  confidence        Float
+  recommendation    String           // disable | review | keep
+  status            String           // pending | acknowledged | disabled | failed | skipped | stale
+  reasonJson        String
+  decidedAt         DateTime?
+  errorMessage      String?
+  metadataSnapshot  String           // full flow detail JSON at scan time
+
+  @@index([auditRunId, status])
+  @@index([auditRunId, confidence])
+  @@index([hubspotFlowId])
+}
+
+model SuppressedWorkflow {
+  id            String   @id @default(cuid())
+  hubspotFlowId String   @unique
+  reason        String?
+  createdAt     DateTime @default(now())
+}
+
+// ============================================================
+// HubSpot cleanup — forms audit
+// ============================================================
+model FormAuditRun {
+  id                     String        @id @default(cuid())
+  status                 String
+  stage                  String?       // loading_forms | loading_submissions | scoring | persisting
+  formsScanned           Int           @default(0)
+  totalForms             Int?
+  findingsCount          Int           @default(0)
+  startedAt              DateTime      @default(now())
+  completedAt            DateTime?
+  error                  String?
+  ruleSet                String
+
+  bulkArchiveStatus      String?
+  bulkArchiveMinScore    Float?
+  bulkArchiveTotal       Int?
+  bulkArchivedCount      Int           @default(0)
+  bulkArchiveFailedCount Int           @default(0)
+  bulkArchiveStartedAt   DateTime?
+  bulkArchiveCompletedAt DateTime?
+  bulkArchiveError       String?
+
+  findings               FormFinding[]
+
+  @@index([status, startedAt])
+}
+
+model FormFinding {
+  id                String       @id @default(cuid())
+  auditRunId        String
+  auditRun          FormAuditRun @relation(fields: [auditRunId], references: [id], onDelete: Cascade)
+  hubspotFormId     String       // UUID from HubSpot
+  name              String
+  formType          String       // hubspot | flow | native
+  fieldCount        Int          @default(0)
+  createdAt         DateTime
+  updatedAt         DateTime
+  lastSubmittedAt   DateTime?    // null if no submissions ever
+  submissionsSeen   Boolean      @default(false) // true if at least 1 submission exists
+  confidence        Float
+  recommendation    String       // archive | review | keep
+  status            String       // pending | acknowledged | archived | failed | skipped | stale
+  reasonJson        String
+  decidedAt         DateTime?
+  errorMessage      String?
+  metadataSnapshot  String
+
+  @@index([auditRunId, status])
+  @@index([auditRunId, confidence])
+  @@index([hubspotFormId])
+}
+
+model SuppressedForm {
+  id            String   @id @default(cuid())
+  hubspotFormId String   @unique
+  reason        String?
+  createdAt     DateTime @default(now())
+}

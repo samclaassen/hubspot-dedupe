@@ -1,92 +1,100 @@
-# HubSpot Dedupe
+# HubSpot Cleanup
 
-A self-hosted tool that scans a HubSpot portal, finds duplicate contacts and companies using tiered matching rules, and merges them from a review dashboard — or on a weekly schedule via launchd + a Slack DM summary.
+Self-hosted Next.js app that audits a HubSpot portal for three categories of cruft and helps clean it up:
 
-Built with Next.js 16 (App Router, React 19), Prisma 7 (SQLite via `better-sqlite3`), Tailwind 4, and Base UI / shadcn.
+1. **Duplicate contacts + companies** → tiered detection rules, per-field merge strategies, bulk auto-merge.
+2. **Unused / stale properties** → scored on populated-record count, workflow references, formula/archivable flags, etc. Archive is a HubSpot soft-delete (90-day recovery).
+3. **Stale lists / segments** → scored on member count, reference count, last-activity timestamps. Delete is hard (no recovery).
 
-## Features
+Runs locally on a Mac Mini with a weekly launchd cron. One unified Slack DM summarizes every Sunday's run.
 
-- **Full-portal scan** using HubSpot's basic "getPage" API (no 10k search cap)
-- **Tiered matching:**
-  - Tier 1.1 — same LinkedIn URL (highest confidence, overrides all else)
-  - Tier 1.2 — same email (contact) / same domain (company)
-  - Tier 2 — normalized name + company match
-  - Tier 3 — fuzzy name within a block
-- **Conflict-safety check** — two records with different non-empty emails or LinkedIn URLs are never collapsed, even if name + company match, to protect against broken-automation name collisions.
-- **Canonical ID resolution** — HubSpot leaves forward references after merges; the scanner batch-resolves them before emitting groups.
-- **Per-field merge strategies** — choose winners per property (e.g. `primary_if_not_empty`, `longest_non_empty`, `most_recent_lastmodified`, `valid_e164_first`). Primary gets PATCHed before the merge call so HubSpot's default "primary wins" behaviour doesn't clobber your choices.
-- **Suppressed pairs** — "Skip" in the UI writes to a `SuppressedPair` table so they don't come back in the next scan.
-- **Weekly scheduled run** — `scripts/weekly-dedupe.ts` scans, auto-merges any group with score ≥ 0.99, and DMs you a Slack summary. Installable as a launchd job on macOS.
+## Stack
 
-## Prerequisites
+- Next.js 16 (App Router, React 19)
+- Prisma 7 + SQLite (`@prisma/adapter-better-sqlite3`)
+- `@hubspot/api-client` with per-second retry/backoff + concurrency limit
+- Tailwind 4 + Base UI / shadcn
+- macOS launchd for scheduling, Slack Block Kit for summaries
 
-- Node 20+ (Homebrew `/opt/homebrew/bin/node`)
-- A HubSpot Private App token with contacts + companies read/write scopes
-- (Optional, for scheduled runs) A Slack app with `chat:write`, `im:write`, `users:read`, `users:read.email` scopes
-
-## Quick start
+## Setup
 
 ```bash
-# 1. Install
 npm install
-
-# 2. Set up env
-cp .env.local.example .env.local
-# edit .env.local — set HUBSPOT_ACCESS_TOKEN at minimum
-
-# 3. Initialise the local SQLite DB
+cp .env.local.example .env.local   # fill in HUBSPOT_ACCESS_TOKEN + optional Slack env
 npx prisma migrate deploy
 npx prisma generate
-
-# 4. Run the dashboard
-npm run dev
-# open http://localhost:3000
 ```
 
-From the dashboard:
-- Click **+ New Scan** to launch a scan
-- Wait for pagination to finish (3–5 min for ~50k contacts)
-- Review detected groups, click into one to see member records side-by-side
-- Pick a merge strategy per field or accept defaults
-- Hit **Merge** for one group, or **Auto-merge all** for everything ≥ 0.99
+Required HubSpot Private App scopes:
+- `crm.objects.contacts.read` / `write`
+- `crm.objects.companies.read` / `write`
+- `crm.objects.deals.read` *(for deal property audit)*
+- `crm.lists.read` / `crm.lists.write` *(for list audit)*
+- `automation` *(for workflow reference checking in property audit)*
 
-## Weekly scheduled runs (macOS)
+Required env (see `.env.local.example` in the sanitized template):
+- `HUBSPOT_ACCESS_TOKEN`
+- `DATABASE_URL=file:./dev.db`
+- `SLACK_BOT_TOKEN`, `SLACK_DM_USER_ID` *(only for weekly Slack DM)*
+- `DEDUPE_DASHBOARD_URL` *(optional, default `http://localhost:3000`)*
+- `DRY_RUN=true` *(optional, turns archive/delete actions into log-only no-ops)*
 
-See [`DEPLOY-WEEKLY.md`](./DEPLOY-WEEKLY.md) for the full guide. Short version:
+## Run locally
 
 ```bash
-# Add SLACK_BOT_TOKEN, SLACK_DM_USER_ID, DEDUPE_DASHBOARD_URL to .env.local
-# Then:
+npm run dev
+# → http://localhost:3000
+```
+
+From there:
+- `/scan/new` — start a dedupe scan (contacts or companies)
+- `/cleanup/properties/new` — start a property audit
+- `/cleanup/lists/new` — start a list audit
+
+## Run the unified weekly cron (one-off)
+
+```bash
+npm run weekly-cleanup
+```
+
+Triggers dedupe → property audit → list audit end-to-end and posts a single Slack DM.
+
+## Install as a macOS launchd job (Sunday 2am)
+
+```bash
 bash scripts/launchd/install.sh
 ```
 
-That installs a launchd job that runs `npm run weekly-dedupe` every Sunday at 2:00 AM and sends the summary as a Slack DM.
-
-Manually trigger a run any time with:
-```bash
-npm run weekly-dedupe
-```
+See [`DEPLOY-WEEKLY.md`](./DEPLOY-WEEKLY.md) for the full guide, troubleshooting, and migration notes (the old `com.yourorg.hubspot-dedupe` label auto-upgrades to `com.yourorg.hubspot-cleanup`).
 
 ## Project layout
 
 ```
-prisma/schema.prisma        Data model (ScanRun, DuplicateGroup, GroupMember, SuppressedPair)
-src/lib/hubspot.ts          HubSpot API wrapper (pagination, batch reads, canonical ID resolution)
-src/lib/normalize.ts        Field normalization (email, phone E.164, LinkedIn URL, name, company)
-src/lib/match.ts            Tiered detection + union-find + conflict check
-src/lib/merge.ts            Per-field strategies + PATCH-then-merge pipeline
-src/lib/scanner.ts          Scan orchestrator; filters suppressed pairs and forward-refs
-src/lib/slack.ts            Block Kit formatter + chat.postMessage wrapper
-src/app/page.tsx            Dashboard (live HubSpot totals, past scans, latest scheduled run)
-src/app/scan/[id]/          Per-scan review UI + server actions for merge + skip
-scripts/weekly-dedupe.ts    CLI entry point for the weekly cron
-scripts/launchd/            launchd plist template + installer for macOS scheduling
+prisma/schema.prisma           Data model (ScanRun, DuplicateGroup, GroupMember,
+                               SuppressedPair, PropertyAuditRun, PropertyFinding,
+                               SuppressedProperty, ListAuditRun, ListFinding,
+                               SuppressedList)
+src/lib/hubspot.ts             HubSpot API wrapper (pagination, rate limiting,
+                               retry, canonical ID resolution, cleanup helpers)
+src/lib/normalize.ts           Email / LinkedIn / phone / name normalization
+src/lib/match.ts               Dedupe detection (tier 1–3 + conflict safety)
+src/lib/merge.ts               Per-field merge strategies + PATCH-then-merge
+src/lib/scanner.ts             Dedupe scan orchestrator
+src/lib/cleanup-types.ts       Status / recommendation / thresholds constants
+src/lib/cleanup-scoring.ts     scoreProperty, scoreList (pure functions)
+src/lib/property-auditor.ts    Property audit lifecycle (runPropertyAudit)
+src/lib/list-auditor.ts        List audit lifecycle (runListAudit)
+src/lib/slack.ts               Block Kit formatters + postSlackDM
+src/app/page.tsx               Home dashboard
+src/app/scan/[id]/*            Dedupe review + actions
+src/app/cleanup/**             Property + list audit review UIs
+scripts/weekly-cleanup.ts      Unified weekly cron (dedupe + property + list)
+scripts/weekly-dedupe.ts       Legacy dedupe-only cron (kept for reference)
+scripts/launchd/               launchd plist + install script
 ```
 
-## Merge rules
+## See also
 
-See [`MERGE_RULES.md`](./MERGE_RULES.md) for the full per-field strategy table, and [`PLAN.md`](./PLAN.md) for the original design doc / decision log.
-
-## Licensing
-
-None included — add one before publishing if that matters to you.
+- [`PLAN.md`](./PLAN.md) — original dedupe build plan + rule tables
+- [`MERGE_RULES.md`](./MERGE_RULES.md) — per-field merge strategies
+- [`DEPLOY-WEEKLY.md`](./DEPLOY-WEEKLY.md) — Mac Mini launchd deployment guide
